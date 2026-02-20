@@ -1,4 +1,4 @@
-import yfinance as yf
+import pandas_datareader as pdr
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,7 +8,8 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.manifold import TSNE
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, Model
-from tensorflow.keras.layers import (Dense, LeakyReLU, BatchNormalization, Reshape, Flatten, Input)
+from tensorflow.keras.layers import (
+    Dense, LeakyReLU, BatchNormalization, Reshape, Flatten, Input)
 from tensorflow.keras.optimizers import Adam
 import warnings
 import os
@@ -28,7 +29,8 @@ print(f"TensorFlow Version: {tf.__version__}")
 
 # --- Helper Functions ---
 
-def load_and_preprocess_data(ticker: str = 'SPY', start_date: str = '2010-01-01', end_date: str = '2024-01-01') -> pd.DataFrame:
+
+def load_and_preprocess_data(ticker: str = 'AAPL', start_date: str = '2010-01-01', end_date: str = '2024-01-01') -> pd.DataFrame:
     """
     Loads historical OHLCV data, calculates percentage changes for prices,
     and log-transformed differences for volume.
@@ -45,19 +47,25 @@ def load_and_preprocess_data(ticker: str = 'SPY', start_date: str = '2010-01-01'
         ValueError: If no data is downloaded or insufficient data for processing.
     """
     print(f"Downloading data for {ticker} from {start_date} to {end_date}...")
-    data = yf.download(ticker, start=start_date, end=end_date, progress=False)
-
+    # Use pandas_datareader with stooq data source
+    data = pdr.get_data_stooq(ticker, start=start_date, end=end_date)
+    # Stooq returns data in descending order, so reverse it
+    data = data.sort_index()
+    print(data.head())
     if data.empty:
-        raise ValueError(f"No data downloaded for {ticker}. Check ticker and date range.")
+        raise ValueError(
+            f"No data downloaded for {ticker}. Check ticker and date range.")
 
     if len(data) < 2:
-        raise ValueError(f"Insufficient data downloaded for {ticker}. Expected at least 2 rows, but got {len(data)}. Adjust date range or ticker.")
+        raise ValueError(
+            f"Insufficient data downloaded for {ticker}. Expected at least 2 rows, but got {len(data)}. Adjust date range or ticker.")
 
     features_df = data[['Open', 'High', 'Low', 'Close']].pct_change()
     features_df['volume'] = np.log1p(data['Volume']).diff()
     features_df = features_df.dropna()
 
-    print(f"\nTraining data shape: {features_df.shape[0]} days x {features_df.shape[1]} features")
+    print(
+        f"\nTraining data shape: {features_df.shape[0]} days x {features_df.shape[1]} features")
     close_returns = features_df['Close']
     mean_val = float(close_returns.mean())
     std_val = float(close_returns.std())
@@ -67,6 +75,7 @@ def load_and_preprocess_data(ticker: str = 'SPY', start_date: str = '2010-01-01'
           f"skew={skew_val:.2f}, kurt={kurt_val:.2f}")
 
     return features_df
+
 
 def simulate_gbm(mu_annual: float, sigma_annual: float, S0: float, n_days: int, n_paths: int, dt_annual: float = 1/252) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -85,12 +94,14 @@ def simulate_gbm(mu_annual: float, sigma_annual: float, S0: float, n_days: int, 
             returns_paths (np.array): Simulated daily returns for each path.
             price_paths (np.array): Simulated daily prices for each path.
     """
-    daily_returns_factor = np.exp((mu_annual - 0.5 * sigma_annual**2) * dt_annual + sigma_annual * np.sqrt(dt_annual) * np.random.standard_normal((n_paths, n_days)))
+    daily_returns_factor = np.exp((mu_annual - 0.5 * sigma_annual**2) * dt_annual +
+                                  sigma_annual * np.sqrt(dt_annual) * np.random.standard_normal((n_paths, n_days)))
     prices = np.full((n_paths, n_days + 1), S0, dtype=float)
     for t in range(n_days):
         prices[:, t+1] = prices[:, t] * daily_returns_factor[:, t]
     returns = np.log(prices[:, 1:] / prices[:, :-1])
     return returns, prices
+
 
 def prepare_sequences(data: np.ndarray, seq_len: int) -> np.ndarray:
     """
@@ -105,11 +116,13 @@ def prepare_sequences(data: np.ndarray, seq_len: int) -> np.ndarray:
     """
     sequences = []
     if len(data) < seq_len:
-        print(f"Warning: Not enough data points ({len(data)}) to create sequences of desired length ({seq_len}).")
+        print(
+            f"Warning: Not enough data points ({len(data)}) to create sequences of desired length ({seq_len}).")
         return np.array([])
     for i in range(len(data) - seq_len + 1):
         sequences.append(data[i:i+seq_len])
     return np.array(sequences)
+
 
 def build_generator(latent_dim: int, seq_len: int, n_features: int, layers_dim: int) -> tf.keras.Model:
     """
@@ -136,6 +149,7 @@ def build_generator(latent_dim: int, seq_len: int, n_features: int, layers_dim: 
     ], name='generator')
     return model
 
+
 def build_discriminator(seq_len: int, n_features: int, layers_dim: int) -> tf.keras.Model:
     """
     Builds the discriminator model for a custom GAN.
@@ -157,6 +171,7 @@ def build_discriminator(seq_len: int, n_features: int, layers_dim: int) -> tf.ke
         Dense(1, activation='sigmoid')
     ], name='discriminator')
     return model
+
 
 def compute_acf(x: np.ndarray, nlags: int = 20) -> list:
     """
@@ -180,15 +195,17 @@ def compute_acf(x: np.ndarray, nlags: int = 20) -> list:
                 if min_len > 0:
                     # Check for zero variance to avoid NaNs from corrcoef
                     if np.std(x_demean[:-lag][:min_len]) == 0 or np.std(x_demean[lag:][:min_len]) == 0:
-                        corr = 0.0 # If no variance, correlation is undefined, treat as 0
+                        corr = 0.0  # If no variance, correlation is undefined, treat as 0
                     else:
-                        corr = np.corrcoef(x_demean[:-lag][:min_len], x_demean[lag:][:min_len])[0, 1]
+                        corr = np.corrcoef(
+                            x_demean[:-lag][:min_len], x_demean[lag:][:min_len])[0, 1]
                 else:
                     corr = np.nan
             else:
                 corr = np.nan
             result.append(corr)
     return [r for r in result if not np.isnan(r)]
+
 
 def momentum_strategy(returns: np.ndarray, lookback: int = 10) -> np.ndarray:
     """
@@ -213,6 +230,7 @@ def momentum_strategy(returns: np.ndarray, lookback: int = 10) -> np.ndarray:
     strategy_returns = signals * returns
     return strategy_returns
 
+
 def calculate_sharpe_ratio(returns: np.ndarray, annual_risk_free_rate: float = 0.02, trading_days_per_year: int = 252) -> float:
     """
     Calculates the annualized Sharpe Ratio.
@@ -228,16 +246,19 @@ def calculate_sharpe_ratio(returns: np.ndarray, annual_risk_free_rate: float = 0
     if returns.size == 0 or np.std(returns) == 0:
         return 0.0
 
-    daily_risk_free_rate = (1 + annual_risk_free_rate)**(1/trading_days_per_year) - 1
+    daily_risk_free_rate = (
+        1 + annual_risk_free_rate)**(1/trading_days_per_year) - 1
     excess_returns = returns - daily_risk_free_rate
 
-    annualized_mean_excess_return = np.mean(excess_returns) * trading_days_per_year
+    annualized_mean_excess_return = np.mean(
+        excess_returns) * trading_days_per_year
     annualized_std_dev = np.std(returns) * np.sqrt(trading_days_per_year)
 
     sharpe_ratio = annualized_mean_excess_return / annualized_std_dev
     return sharpe_ratio
 
 # --- Main Functions for the Workflow ---
+
 
 def run_gbm_simulation_and_plot(
     features_df: pd.DataFrame,
@@ -263,8 +284,10 @@ def run_gbm_simulation_and_plot(
     mu_annual = np.mean(historical_close_returns) * 252
     sigma_annual = np.std(historical_close_returns) * np.sqrt(252)
 
-    print(f"\nCalibrated GBM: Annual Mean (mu) = {mu_annual:.4f}, Annual Std (sigma) = {sigma_annual:.4f}")
-    gbm_returns, gbm_prices = simulate_gbm(mu_annual, sigma_annual, s0, n_days_sim, n_paths_sim)
+    print(
+        f"\nCalibrated GBM: Annual Mean (mu) = {mu_annual:.4f}, Annual Std (sigma) = {sigma_annual:.4f}")
+    gbm_returns, gbm_prices = simulate_gbm(
+        mu_annual, sigma_annual, s0, n_days_sim, n_paths_sim)
 
     print(f"GBM simulated paths shape (returns): {gbm_returns.shape}")
     print(f"GBM simulated paths shape (prices): {gbm_prices.shape}")
@@ -272,7 +295,8 @@ def run_gbm_simulation_and_plot(
     plt.figure(figsize=(12, 6))
     for i in range(min(20, n_paths_sim)):
         plt.plot(gbm_prices[i], alpha=0.5, color='blue')
-    plt.title(f'Monte Carlo GBM: {min(20, n_paths_sim)} Sample Price Paths (S&P 500 ETF)')
+    plt.title(
+        f'Monte Carlo GBM: {min(20, n_paths_sim)} Sample Price Paths (S&P 500 ETF)')
     plt.xlabel('Trading Day')
     plt.ylabel('Price')
     plt.grid(True, linestyle=':', alpha=0.7)
@@ -281,6 +305,7 @@ def run_gbm_simulation_and_plot(
     print(f"GBM sample paths plot saved to {output_path}")
 
     return gbm_returns, gbm_prices
+
 
 def prepare_gan_training_data(
     features_df: pd.DataFrame,
@@ -308,9 +333,11 @@ def prepare_gan_training_data(
     print(f"Prepared real sequences shape for GAN: {real_sequences.shape}")
 
     if real_sequences.size == 0:
-        raise ValueError("Real sequences are empty. Cannot train GAN. Adjust SEQ_LEN or data range.")
+        raise ValueError(
+            "Real sequences are empty. Cannot train GAN. Adjust SEQ_LEN or data range.")
 
     return real_sequences, scaler
+
 
 def train_gan_model(
     real_sequences: np.ndarray,
@@ -368,7 +395,8 @@ def train_gan_model(
         print("\nTimeGAN training completed using ydata-synthetic.")
     else:
         print("\nFalling back to custom simplified GAN implementation...")
-        generator = build_generator(latent_dim, seq_len, n_features, layers_dim)
+        generator = build_generator(
+            latent_dim, seq_len, n_features, layers_dim)
         discriminator = build_discriminator(seq_len, n_features, layers_dim)
 
         discriminator.compile(optimizer=Adam(learning_rate=0.0002, beta_1=0.5),
@@ -394,8 +422,10 @@ def train_gan_model(
             noise = np.random.normal(0, 1, (batch_size, latent_dim))
             fake_batch = generator.predict(noise, verbose=0)
 
-            d_loss_real = discriminator.train_on_batch(real_batch, np.ones((batch_size, 1)) * 0.9)
-            d_loss_fake = discriminator.train_on_batch(fake_batch, np.zeros((batch_size, 1)) * 0.1)
+            d_loss_real = discriminator.train_on_batch(
+                real_batch, np.ones((batch_size, 1)) * 0.9)
+            d_loss_fake = discriminator.train_on_batch(
+                fake_batch, np.zeros((batch_size, 1)) * 0.1)
             d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
 
             noise = np.random.normal(0, 1, (batch_size, latent_dim))
@@ -405,11 +435,13 @@ def train_gan_model(
             g_losses.append(g_loss)
 
             if epoch % (custom_gan_epochs // 10 if custom_gan_epochs >= 10 else 1) == 0:
-                print(f"Epoch {epoch}/{custom_gan_epochs}: D loss={d_loss[0]:.4f}, G loss={g_loss:.4f}")
+                print(
+                    f"Epoch {epoch}/{custom_gan_epochs}: D loss={d_loss[0]:.4f}, G loss={g_loss:.4f}")
         trained_model = generator
         print("\nCustom GAN training completed.")
 
     return trained_model, d_losses, g_losses
+
 
 def plot_gan_losses(
     generator_losses: list,
@@ -439,6 +471,7 @@ def plot_gan_losses(
     else:
         print("No GAN loss data available for plotting (ydata-synthetic TimeGAN does not expose per-epoch losses this way, or training was skipped).")
 
+
 def generate_synthetic_data(
     trained_model: tf.keras.Model | object,
     n_samples: int,
@@ -467,15 +500,20 @@ def generate_synthetic_data(
         synthetic_data_scaled = trained_model.sample(n_samples=n_samples)
     else:
         noise_for_generation = np.random.normal(0, 1, (n_samples, latent_dim))
-        synthetic_data_scaled = trained_model.predict(noise_for_generation, verbose=0)
+        synthetic_data_scaled = trained_model.predict(
+            noise_for_generation, verbose=0)
 
-    print(f"Generated synthetic data shape (scaled): {synthetic_data_scaled.shape}")
+    print(
+        f"Generated synthetic data shape (scaled): {synthetic_data_scaled.shape}")
 
     dummy_features = np.zeros((n_samples * seq_len, n_features))
-    dummy_features[:, :] = synthetic_data_scaled.reshape(n_samples * seq_len, n_features)
-    synthetic_data_original_scale = scaler.inverse_transform(dummy_features).reshape(n_samples, seq_len, n_features)
+    dummy_features[:, :] = synthetic_data_scaled.reshape(
+        n_samples * seq_len, n_features)
+    synthetic_data_original_scale = scaler.inverse_transform(
+        dummy_features).reshape(n_samples, seq_len, n_features)
 
     return synthetic_data_original_scale, synthetic_data_scaled
+
 
 def plot_real_vs_synthetic_paths(
     features_df: pd.DataFrame,
@@ -503,30 +541,37 @@ def plot_real_vs_synthetic_paths(
     synth_close_returns = synthetic_data_original_scale[:, :, 3]
 
     # Convert synthetic returns to price paths
-    synth_prices = np.array([s0 * np.exp(np.cumsum(path_returns)) for path_returns in synth_close_returns])
-    synth_prices = np.column_stack([np.full(synth_close_returns.shape[0], s0), synth_prices])
+    synth_prices = np.array([s0 * np.exp(np.cumsum(path_returns))
+                            for path_returns in synth_close_returns])
+    synth_prices = np.column_stack(
+        [np.full(synth_close_returns.shape[0], s0), synth_prices])
 
     real_full_returns = features_df['Close'].values
-    num_real_paths_to_plot = min(n_samples_to_plot, real_full_returns.shape[0] - seq_len + 1)
+    num_real_paths_to_plot = min(
+        n_samples_to_plot, real_full_returns.shape[0] - seq_len + 1)
 
     if num_real_paths_to_plot <= 0:
         print("Warning: Not enough real data to create sequences for plotting. Skipping real path plot.")
         real_prices_for_plot = np.array([])
         real_close_sequences_for_plot = np.array([])
     else:
-        real_close_sequences_for_plot = prepare_sequences(real_full_returns.reshape(-1, 1), seq_len).squeeze()
+        real_close_sequences_for_plot = prepare_sequences(
+            real_full_returns.reshape(-1, 1), seq_len).squeeze()
         if real_close_sequences_for_plot.ndim == 1 and num_real_paths_to_plot > 0:
-            real_close_sequences_for_plot = real_close_sequences_for_plot.reshape(-1, seq_len)
+            real_close_sequences_for_plot = real_close_sequences_for_plot.reshape(
+                -1, seq_len)
         real_close_sequences_for_plot = real_close_sequences_for_plot[:num_real_paths_to_plot]
 
-        real_prices_for_plot = np.array([s0 * np.exp(np.cumsum(path_returns)) for path_returns in real_close_sequences_for_plot])
-        real_prices_for_plot = np.column_stack([np.full(num_real_paths_to_plot, s0), real_prices_for_plot])
+        real_prices_for_plot = np.array(
+            [s0 * np.exp(np.cumsum(path_returns)) for path_returns in real_close_sequences_for_plot])
+        real_prices_for_plot = np.column_stack(
+            [np.full(num_real_paths_to_plot, s0), real_prices_for_plot])
         print(f"Real prices for plotting shape: {real_prices_for_plot.shape}")
 
     print(f"Synthetic close returns shape: {synth_close_returns.shape}")
     print(f"Synthetic prices shape: {synth_prices.shape}")
-    print(f"Real close sequences shape for plotting: {real_close_sequences_for_plot.shape}")
-
+    print(
+        f"Real close sequences shape for plotting: {real_close_sequences_for_plot.shape}")
 
     plt.figure(figsize=(16, 6))
 
@@ -554,6 +599,7 @@ def plot_real_vs_synthetic_paths(
     print(f"Real vs. Synthetic paths plot saved to {output_path}")
 
     return synth_close_returns
+
 
 def perform_statistical_comparison(
     real_features_df: pd.DataFrame,
@@ -584,7 +630,8 @@ def perform_statistical_comparison(
     metrics_to_compare = [
         ('Mean', np.mean),
         ('Std', np.std),
-        ('Skewness', lambda x: float(describe(x).skewness) if x.size > 1 else np.nan), # describe needs at least 2 samples
+        ('Skewness', lambda x: float(describe(x).skewness) if x.size >
+         1 else np.nan),  # describe needs at least 2 samples
         ('Kurtosis', lambda x: float(describe(x).kurtosis) if x.size > 1 else np.nan)
     ]
 
@@ -598,14 +645,19 @@ def perform_statistical_comparison(
     ks_gbm, p_gbm = ks_2samp(real_flat, gbm_flat)
 
     print(f"\nKolmogorov-Smirnov Test Results:")
-    print(f"TimeGAN vs Real: KS Stat={ks_gan.item():.4f} (p={p_gan.item():.4f})")
-    print(f"GBM vs Real:     KS Stat={ks_gbm.item():.4f} (p={p_gbm.item():.4f})")
+    print(
+        f"TimeGAN vs Real: KS Stat={ks_gan.item():.4f} (p={p_gan.item():.4f})")
+    print(
+        f"GBM vs Real:     KS Stat={ks_gbm.item():.4f} (p={p_gbm.item():.4f})")
     print("(Lower KS statistic and higher p-value indicate more similar distributions)")
 
     plt.figure(figsize=(12, 6))
-    sns.histplot(real_flat, bins=50, color='blue', label='Real Returns', kde=True, stat='density', alpha=0.6)
-    sns.histplot(synth_flat, bins=50, color='red', label='TimeGAN Synthetic Returns', kde=True, stat='density', alpha=0.6)
-    sns.histplot(gbm_flat, bins=50, color='green', label='GBM Simulated Returns', kde=True, stat='density', alpha=0.6)
+    sns.histplot(real_flat, bins=50, color='blue',
+                 label='Real Returns', kde=True, stat='density', alpha=0.6)
+    sns.histplot(synth_flat, bins=50, color='red',
+                 label='TimeGAN Synthetic Returns', kde=True, stat='density', alpha=0.6)
+    sns.histplot(gbm_flat, bins=50, color='green',
+                 label='GBM Simulated Returns', kde=True, stat='density', alpha=0.6)
     plt.title('Distribution of Daily Close Returns: Real vs. Synthetic vs. GBM')
     plt.xlabel('Daily Return')
     plt.ylabel('Density')
@@ -616,6 +668,7 @@ def perform_statistical_comparison(
     print(f"Return distributions plot saved to {output_path}")
 
     return real_flat, synth_flat, gbm_flat
+
 
 def plot_acf_comparison(
     real_flat_returns: np.ndarray,
@@ -645,9 +698,12 @@ def plot_acf_comparison(
     plt.figure(figsize=(16, 6))
 
     plt.subplot(1, 2, 1)
-    plt.plot(range(len(acf_real)), acf_real, label='Real Returns', marker='o', linestyle='--')
-    plt.plot(range(len(acf_synth)), acf_synth, label='TimeGAN Synthetic Returns', marker='x', linestyle='-.')
-    plt.plot(range(len(acf_gbm)), acf_gbm, label='GBM Simulated Returns', marker='^', linestyle=':')
+    plt.plot(range(len(acf_real)), acf_real,
+             label='Real Returns', marker='o', linestyle='--')
+    plt.plot(range(len(acf_synth)), acf_synth,
+             label='TimeGAN Synthetic Returns', marker='x', linestyle='-.')
+    plt.plot(range(len(acf_gbm)), acf_gbm,
+             label='GBM Simulated Returns', marker='^', linestyle=':')
     plt.title('Autocorrelation Function (ACF) of Returns')
     plt.xlabel('Lag')
     plt.ylabel('Autocorrelation')
@@ -655,10 +711,14 @@ def plot_acf_comparison(
     plt.legend()
 
     plt.subplot(1, 2, 2)
-    plt.plot(range(len(acf_abs_real)), acf_abs_real, label='Real Absolute Returns', marker='o', linestyle='--')
-    plt.plot(range(len(acf_abs_synth)), acf_abs_synth, label='TimeGAN Synthetic Absolute Returns', marker='x', linestyle='-.')
-    plt.plot(range(len(acf_abs_gbm)), acf_abs_gbm, label='GBM Simulated Absolute Returns', marker='^', linestyle=':')
-    plt.title('Autocorrelation Function (ACF) of Absolute Returns (Volatility Clustering)')
+    plt.plot(range(len(acf_abs_real)), acf_abs_real,
+             label='Real Absolute Returns', marker='o', linestyle='--')
+    plt.plot(range(len(acf_abs_synth)), acf_abs_synth,
+             label='TimeGAN Synthetic Absolute Returns', marker='x', linestyle='-.')
+    plt.plot(range(len(acf_abs_gbm)), acf_abs_gbm,
+             label='GBM Simulated Absolute Returns', marker='^', linestyle=':')
+    plt.title(
+        'Autocorrelation Function (ACF) of Absolute Returns (Volatility Clustering)')
     plt.xlabel('Lag')
     plt.ylabel('Autocorrelation')
     plt.grid(True, linestyle=':', alpha=0.7)
@@ -668,6 +728,7 @@ def plot_acf_comparison(
     plt.savefig(output_path, dpi=150)
     plt.close()
     print(f"ACF comparison plots saved to {output_path}")
+
 
 def plot_tsne_visualization(
     real_sequences_scaled: np.ndarray,
@@ -684,28 +745,34 @@ def plot_tsne_visualization(
         n_viz (int): Number of sequences to visualize from each set.
         output_path (str): File path to save the t-SNE plot.
     """
-    n_viz = min(n_viz, real_sequences_scaled.shape[0], synthetic_data_scaled.shape[0])
+    n_viz = min(
+        n_viz, real_sequences_scaled.shape[0], synthetic_data_scaled.shape[0])
 
     if n_viz == 0:
         print("Warning: Not enough data for t-SNE visualization. Skipping t-SNE plot.")
         return
 
     real_sequences_flat_viz = real_sequences_scaled[:n_viz].reshape(n_viz, -1)
-    synthetic_sequences_flat_viz = synthetic_data_scaled[:n_viz].reshape(n_viz, -1)
+    synthetic_sequences_flat_viz = synthetic_data_scaled[:n_viz].reshape(
+        n_viz, -1)
 
-    combined_sequences_flat = np.vstack([real_sequences_flat_viz, synthetic_sequences_flat_viz])
+    combined_sequences_flat = np.vstack(
+        [real_sequences_flat_viz, synthetic_sequences_flat_viz])
 
     # Perplexity must be less than n_samples. Minimum of 50 samples usually needed for t-SNE.
     if len(combined_sequences_flat) <= 1:
-        print(f"Warning: Insufficient samples ({len(combined_sequences_flat)}) for t-SNE. Need at least 2.")
+        print(
+            f"Warning: Insufficient samples ({len(combined_sequences_flat)}) for t-SNE. Need at least 2.")
         return
 
     perplexity_val = min(30, len(combined_sequences_flat) - 1)
     if perplexity_val < 1:
-        print(f"Warning: Perplexity value calculated as {perplexity_val}, which is too low for t-SNE. Skipping t-SNE plot.")
+        print(
+            f"Warning: Perplexity value calculated as {perplexity_val}, which is too low for t-SNE. Skipping t-SNE plot.")
         return
 
-    tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity_val, n_iter=300)
+    tsne = TSNE(n_components=2, random_state=42,
+                perplexity=perplexity_val, n_iter=300)
     embedded_sequences = tsne.fit_transform(combined_sequences_flat)
 
     plt.figure(figsize=(10, 8))
@@ -721,6 +788,7 @@ def plot_tsne_visualization(
     plt.savefig(output_path, dpi=150)
     plt.close()
     print(f"t-SNE visualization plot saved to {output_path}")
+
 
 def evaluate_trading_strategy(
     real_features_df: pd.DataFrame,
@@ -742,27 +810,37 @@ def evaluate_trading_strategy(
         output_path (str): File path to save the strategy performance plot.
     """
     real_full_returns = real_features_df['Close'].values
-    real_strat_returns = momentum_strategy(real_full_returns, lookback=strategy_lookback)
-    real_sharpe_ratio = calculate_sharpe_ratio(real_strat_returns, annual_risk_free_rate, trading_days_per_year)
+    real_strat_returns = momentum_strategy(
+        real_full_returns, lookback=strategy_lookback)
+    real_sharpe_ratio = calculate_sharpe_ratio(
+        real_strat_returns, annual_risk_free_rate, trading_days_per_year)
 
-    print(f"\nStrategy Sharpe Ratio on real historical data: {real_sharpe_ratio:.3f}")
+    print(
+        f"\nStrategy Sharpe Ratio on real historical data: {real_sharpe_ratio:.3f}")
 
     synth_sharpe_ratios = []
     for i in range(synthetic_close_returns.shape[0]):
         path_returns = synthetic_close_returns[i]
-        strat_returns_synth = momentum_strategy(path_returns, lookback=strategy_lookback)
-        sharpe = calculate_sharpe_ratio(strat_returns_synth, annual_risk_free_rate, trading_days_per_year)
+        strat_returns_synth = momentum_strategy(
+            path_returns, lookback=strategy_lookback)
+        sharpe = calculate_sharpe_ratio(
+            strat_returns_synth, annual_risk_free_rate, trading_days_per_year)
         synth_sharpe_ratios.append(sharpe)
 
     synth_sharpe_ratios = np.array(synth_sharpe_ratios)
 
-    print(f"\nStrategy Sharpe Ratio on synthetic data (Mean): {np.mean(synth_sharpe_ratios):.3f}")
-    print(f"Strategy Sharpe Ratio on synthetic data (5th Percentile): {np.percentile(synth_sharpe_ratios, 5):.3f}")
-    print(f"Strategy Sharpe Ratio on synthetic data (95th Percentile): {np.percentile(synth_sharpe_ratios, 95):.3f}")
+    print(
+        f"\nStrategy Sharpe Ratio on synthetic data (Mean): {np.mean(synth_sharpe_ratios):.3f}")
+    print(
+        f"Strategy Sharpe Ratio on synthetic data (5th Percentile): {np.percentile(synth_sharpe_ratios, 5):.3f}")
+    print(
+        f"Strategy Sharpe Ratio on synthetic data (95th Percentile): {np.percentile(synth_sharpe_ratios, 95):.3f}")
 
     plt.figure(figsize=(10, 6))
-    plt.hist(synth_sharpe_ratios, bins=50, alpha=0.7, edgecolor='black', color='coral', label='Synthetic Sharpe Ratios')
-    plt.axvline(x=real_sharpe_ratio, color='blue', linestyle='--', linewidth=2, label=f'Real Sharpe: {real_sharpe_ratio:.2f}')
+    plt.hist(synth_sharpe_ratios, bins=50, alpha=0.7, edgecolor='black',
+             color='coral', label='Synthetic Sharpe Ratios')
+    plt.axvline(x=real_sharpe_ratio, color='blue', linestyle='--',
+                linewidth=2, label=f'Real Sharpe: {real_sharpe_ratio:.2f}')
     plt.title('Distribution of Strategy Performance Across Synthetic Paths')
     plt.xlabel('Sharpe Ratio')
     plt.ylabel('Frequency')
@@ -774,8 +852,9 @@ def evaluate_trading_strategy(
 
 # --- Main Orchestration Function ---
 
+
 def run_financial_gan_synthesis(
-    ticker: str = 'SPY',
+    ticker: str = 'AAPL',
     start_date: str = '2010-01-01',
     end_date: str = '2024-01-01',
     seq_len: int = 20,
@@ -846,7 +925,8 @@ def run_financial_gan_synthesis(
 
     # 3. Prepare Data for GAN Training
     try:
-        real_sequences_scaled, scaler = prepare_gan_training_data(features_df, seq_len)
+        real_sequences_scaled, scaler = prepare_gan_training_data(
+            features_df, seq_len)
     except ValueError as e:
         print(f"Error during GAN data preparation: {e}")
         return
@@ -866,7 +946,8 @@ def run_financial_gan_synthesis(
     )
 
     # 5. Plot GAN Losses (if custom GAN was used)
-    plot_gan_losses(g_losses, d_losses, output_path=os.path.join(output_dir, 'gan_loss_curves.png'))
+    plot_gan_losses(g_losses, d_losses, output_path=os.path.join(
+        output_dir, 'gan_loss_curves.png'))
 
     # 6. Generate Synthetic Data
     synthetic_data_original_scale, synthetic_data_scaled_for_tsne = generate_synthetic_data(
@@ -897,7 +978,8 @@ def run_financial_gan_synthesis(
         real_features_df=features_df,
         synthetic_close_returns=synth_close_returns,
         gbm_returns=gbm_returns,
-        output_path=os.path.join(output_dir, 'return_distributions_overlay.png')
+        output_path=os.path.join(
+            output_dir, 'return_distributions_overlay.png')
     )
 
     # 9. Plot ACF Comparison
@@ -924,7 +1006,8 @@ def run_financial_gan_synthesis(
         strategy_lookback=strategy_lookback,
         annual_risk_free_rate=annual_risk_free_rate,
         trading_days_per_year=trading_days_per_year,
-        output_path=os.path.join(output_dir, 'synthetic_backtest_distribution.png')
+        output_path=os.path.join(
+            output_dir, 'synthetic_backtest_distribution.png')
     )
 
     print("\n--- Financial Time Series GAN Synthesis Completed ---")
@@ -934,13 +1017,13 @@ if __name__ == "__main__":
     # Example usage when running the script directly
     # All plots will be saved in the 'outputs' directory
     run_financial_gan_synthesis(
-        ticker='SPY',
+        ticker='AAPL',
         start_date='2010-01-01',
         end_date='2024-01-01',
         seq_len=20,
         gbm_n_paths_sim=1000,
         timegan_train_steps=5000,
-        custom_gan_epochs=500, # Increased custom GAN epochs for better results
+        custom_gan_epochs=500,  # Increased custom GAN epochs for better results
         n_synthetic_samples=1000,
-        output_dir='outputs_SPY_analysis' # Custom output directory for this run
+        output_dir='outputs_AAPL_analysis'  # Custom output directory for this run
     )
